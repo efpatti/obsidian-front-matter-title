@@ -1,6 +1,6 @@
 {
   "name": "pretty-titles",
-  "version": "4.3.0",
+  "version": "4.4.0",
   "description": "Punctuation-friendly inline titles and normalized filenames.",
   "main": "main.js",
   "scripts": {

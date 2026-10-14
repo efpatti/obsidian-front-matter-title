@@ -1,5 +1,7 @@
-import { Component, MarkdownView, Notice, Plugin, TFile, getFrontMatterInfo, parseYaml } from "obsidian";
-import { humanize, prefixOf, slugify, withoutPrefix } from "./names";
+import { Component, MarkdownView, Notice, Plugin, TFile, TFolder } from "obsidian";
+import { humanize, withoutPrefix } from "./names";
+
+import { Numbering } from "./Numbering";
 
 type View = MarkdownView & { inlineTitleEl: HTMLElement };
 type Binding = { view: View; cleanup: () => void };
@@ -13,6 +15,7 @@ export default class TitleSync extends Component {
     private own = new Set<TFile>();
     private queue: Promise<unknown> = Promise.resolve();
     private stopped = false;
+    public numbering: Numbering;
     public migration: { running: boolean; processed: number; renamed: number; errors: string[] } = {
         running: false,
         processed: 0,
@@ -31,6 +34,10 @@ export default class TitleSync extends Component {
     }
 
     onload(): void {
+        this.numbering = new Numbering(this.plugin, this.own, (file, title) => {
+            this.titles.set(file, title);
+            this.known.set(file, title);
+        });
         this.app.workspace.onLayoutReady(() => {
             if (this.stopped) return;
             for (const file of this.app.vault.getMarkdownFiles()) {
@@ -43,10 +50,19 @@ export default class TitleSync extends Component {
             );
             this.registerEvent(
                 this.app.vault.on("rename", (file, oldPath) => {
+                    if (file instanceof TFolder) {
+                        this.numbering.folderRenamed(file, oldPath);
+                        this.schedule(() => this.numbering.apply());
+                        return;
+                    }
                     if (!(file instanceof TFile) || file.extension !== "md" || this.own.has(file)) return;
                     const oldBase = oldPath.split("/").pop().replace(/\.md$/, "");
-                    // Folder moves do not change the title; actual filename edits do.
-                    this.schedule(() => this.normalize(file, oldBase !== file.basename));
+                    // Editing only the prefix must not discard custom punctuation or reorder the note.
+                    const titleChanged = withoutPrefix(oldBase) !== withoutPrefix(file.basename);
+                    const renamedTitle = titleChanged ? humanize(file.basename) : undefined;
+                    this.schedule(() =>
+                        this.numbering.apply(renamedTitle === undefined ? undefined : new Map([[file, renamedTitle]]))
+                    );
                 })
             );
             this.registerEvent(
@@ -62,9 +78,34 @@ export default class TitleSync extends Component {
                     }
                 })
             );
+            this.registerEvent(
+                this.app.vault.on("delete", file => {
+                    if (file instanceof TFolder || (file instanceof TFile && file.extension === "md"))
+                        this.schedule(() => this.numbering.apply());
+                })
+            );
+            this.schedule(() => this.normalizeAllNow());
             this.registerEvent(this.app.workspace.on("layout-change", () => this.refresh()));
             this.registerEvent(this.app.workspace.on("file-open", () => this.refresh()));
             this.refresh();
+        });
+        for (const delta of [-1, 1] as const)
+            this.plugin.addCommand({
+                id: delta === -1 ? "move-note-up" : "move-note-down",
+                name: delta === -1 ? "Mover nota uma posição acima" : "Mover nota uma posição abaixo",
+                callback: () => {
+                    const file = this.app.workspace.getActiveFile();
+                    if (file?.extension === "md")
+                        this.schedule(async () => {
+                            await this.numbering.move(file, delta);
+                            this.refresh();
+                        });
+                },
+            });
+        this.plugin.addCommand({
+            id: "recover-numbering",
+            name: "Recover interrupted numbering",
+            callback: () => this.schedule(() => this.numbering.recover()),
         });
         this.plugin.addCommand({
             id: "normalize-current-title",
@@ -76,30 +117,28 @@ export default class TitleSync extends Component {
         });
     }
 
-    /** Explicit migration: never run automatically at startup. Caller should back up first. */
+    /** Reconcile all folders; the same operation runs at startup. */
     public async normalizeAll(): Promise<void> {
-        if (this.migration.running) return;
-        this.migration = { running: true, processed: 0, renamed: 0, errors: [] };
-        const work = this.queue
-            .then(async () => {
-                const files = this.app.vault.getMarkdownFiles().sort((a, b) => a.path.localeCompare(b.path));
-                for (const file of files) {
-                    if (this.stopped) break;
-                    const before = file.path;
-                    try {
-                        await this.normalize(file);
-                        if (file.path !== before) this.migration.renamed++;
-                    } catch (error) {
-                        this.migration.errors.push(`${before}: ${error.message}`);
-                    }
-                    this.migration.processed++;
-                }
-            })
-            .finally(() => {
-                this.migration.running = false;
-            });
-        this.queue = work.catch(console.error);
+        const work = this.queue.then(() => this.normalizeAllNow());
+        this.queue = work.catch(error => {
+            console.error(error);
+        });
         await work;
+    }
+
+    private async normalizeAllNow(): Promise<void> {
+        this.migration = { running: true, processed: 0, renamed: 0, errors: [] };
+        try {
+            await this.numbering.apply();
+            this.migration.processed = this.numbering.lastReport.processed;
+            this.migration.renamed = this.numbering.lastReport.renamed;
+        } catch (error) {
+            this.migration.errors.push(String(error));
+            throw error;
+        } finally {
+            this.migration.running = false;
+            this.refresh();
+        }
     }
 
     private schedule(action: () => Promise<void>): void {
@@ -113,68 +152,16 @@ export default class TitleSync extends Component {
             });
     }
 
-    private async readTitle(file: TFile): Promise<string | undefined> {
-        const text = await this.app.vault.read(file);
-        const info = getFrontMatterInfo(text);
-        const value = info.exists ? parseYaml(info.frontmatter)?.title : undefined;
-        return typeof value === "string" && value.trim() ? value : undefined;
-    }
-
-    private async normalize(file: TFile, renamed = false): Promise<void> {
-        if (!this.app.vault.getAbstractFileByPath(file.path)) return;
-        const stored = await this.readTitle(file);
-        const prefix = prefixOf(file.basename);
-        // Keep punctuation when a rename only moved the file or normalized its existing slug.
-        const sameSlug = stored && file.basename === prefix + slugify(withoutPrefix(stored));
-        const title = renamed && !sameSlug ? humanize(file.basename) : (stored ?? humanize(file.basename));
-        await this.save(file, title);
-    }
-
-    private destination(file: TFile, title: string, prefix: string): string {
-        const stem = prefix + slugify(title);
-        const folder = file.parent?.path === "/" ? "" : `${file.parent?.path ?? ""}/`;
-        const occupied = new Set(
-            this.app.vault
-                .getFiles()
-                .filter(f => f !== file)
-                .map(f => f.path.toLowerCase())
-        );
-        for (let i = 1; ; i++) {
-            const name = `${stem}${i === 1 ? "" : `-${i}`}.md`;
-            if (new TextEncoder().encode(name).length > 240)
-                throw new Error("Título longo demais para o filename (limite de 240 bytes). Encurte o título.");
-            const path = folder + name;
-            if (!occupied.has(path.toLowerCase())) return path;
-        }
+    private async normalize(file: TFile): Promise<void> {
+        if (this.app.vault.getAbstractFileByPath(file.path) !== file) return;
+        await this.numbering.apply();
+        this.refresh();
     }
 
     private async save(file: TFile, input: string): Promise<void> {
-        const title = withoutPrefix(input.replace(/[\r\n\t]+/g, " "));
-        const prefix = prefixOf(input) || prefixOf(file.basename);
-        const path = this.destination(file, title, prefix);
-        const oldPath = file.path;
-        const stored = await this.readTitle(file);
-        this.own.add(file);
-        try {
-            // Native rename updates links and respects the user's Obsidian link settings.
-            if (path !== file.path) await this.app.fileManager.renameFile(file, path);
-            try {
-                if (stored !== title)
-                    await this.app.fileManager.processFrontMatter(file, fm => {
-                        fm.title = title;
-                    });
-            } catch (error) {
-                if (file.path !== oldPath && !this.app.vault.getAbstractFileByPath(oldPath)) {
-                    await this.app.fileManager.renameFile(file, oldPath);
-                }
-                throw error;
-            }
-            this.titles.set(file, title);
-            this.known.set(file, title);
-        } finally {
-            this.own.delete(file);
-            this.refresh();
-        }
+        if (this.app.vault.getAbstractFileByPath(file.path) !== file) return;
+        await this.numbering.apply(new Map([[file, input]]));
+        this.refresh();
     }
 
     private display(file: TFile): string {
