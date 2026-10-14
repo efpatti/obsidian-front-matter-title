@@ -1,84 +1,72 @@
-# Front Matter Title
+# Pretty Titles
 
-A plugin for [Obsidian](https://obsidian.md) that shows a **friendly title from your note's frontmatter everywhere in the app — without renaming the file.**
+Fork of [Snezhig's Front Matter Title](https://github.com/snezhig/obsidian-front-matter-title), retaining the upstream source, history and GPL-3.0 license. Plugin ID: `pretty-titles`.
 
-If your notes are named like timestamps (`202208251731.md`), random IDs, or any scheme that isn't human‑readable, this plugin lets you keep those filenames while Obsidian displays the title you actually wrote in the note's frontmatter.
-
-![Front Matter Title — the same file explorer showing filenames versus frontmatter titles](docs/img/hero.png)
-
-> [!IMPORTANT]
-> The plugin **never renames or edits your files.** It only changes what Obsidian *displays*. Your filenames on disk stay exactly as they are.
-
-## What you get
-
-You choose where the title is shown — turn each one on or off in settings:
-
-- **File explorer**, **Search**, **Quick switcher / suggestions**, **Bookmarks** and **Backlinks** — see titles instead of filenames while you navigate.
-- **Tabs**, **note header**, **inline title** and the **window frame** — see the title while you read and write.
-- **Graph** and **Canvas** — nodes and cards show titles too.
-- **Links** — optionally rewrite `[[202208251731]]` link text to the note's title.
-
-See the full list with screenshots in **[Features](./docs/Features.md)**.
-
----
-
-- [Installation](#installation)
-- [Quick start](#quick-start)
-- [Features](./docs/Features.md)
-- [Templates](./docs/Templates.md) · [Template examples](./docs/TemplateExamples.md)
-- [Settings reference](./docs/Settings.md)
-- [Processor (advanced)](./docs/Processor.md)
-- [FAQ & troubleshooting](./docs/FAQ.md)
-- [API](#api)
-
----
-
-## Installation
-
-### From the Obsidian app (recommended)
-
-Open **Settings → Community plugins → Browse**, search for **Front Matter Title**, install it and enable it.
-
-### Using BRAT
-
-Install via the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin and point it at this repository.
-
-### Manual
-
-Download the latest `obsidian-front-matter-title-*.zip` from the [latest release](https://github.com/Snezhig/obsidian-front-matter-title/releases/latest) and unpack it into your vault under `.obsidian/plugins/`.
-
-## Quick start
-
-Three steps, about a minute:
-
-**1. Add a title to a note's frontmatter.** Open any note and put a `title` at the top:
+Edit a readable title in Obsidian's **native inline title**. Punctuation stays in the `title` property; the filename is always normalized to kebab-case on creation or change.
 
 ```yaml
 ---
-title: My readable note title
+title: "Analog vs. Digital: what's different?"
 ---
 ```
 
-**2. Tell the plugin which key to read.** Open **Settings → Front Matter Title**. The **Common main template** is `title` by default — that means the plugin reads the `title` key from each note. Leave it as is to use the example above.
+For a note with prefix `2-`, the filename becomes `2-analog-vs-digital-whats-different.md`. Only the extension keeps a dot. No Markdown heading is inserted.
 
-**3. Turn on where you want it shown.** In the same settings page, enable the **Explorer** feature. The note in your file explorer now shows *My readable note title* instead of the filename.
+## Behavior
 
-That's it. Enable more places from **[Features](./docs/Features.md)**, and learn how to build smarter titles in **[Templates](./docs/Templates.md)**.
+- Inline title: Enter, Tab or clicking away saves. Escape cancels. Paste inserts plain text. IME composition is respected.
+- Property edits: changing `title` also normalizes the filename.
+- File explorer / F2: renaming the filename rebuilds the readable title. A folder move preserves the custom title.
+- Leading `12-` is structural numbering: preserved in the filename and omitted from the displayed/stored title. Numbers elsewhere are preserved.
+- Existing titles keep their casing and punctuation. Notes without a title use a humanized filename as fallback.
+- Filenames use lowercase letters, numbers and single hyphens. Spaces, underscores, symbols, emojis and punctuation become separators; periods and quotation marks are removed. Latin accents are folded (`ação` → `acao`); other scripts retain their letters and numbers.
+- Collisions receive `-2`, `-3`, etc. Existing notes are never overwritten. Windows device names are prefixed with `note-`.
+- Empty/punctuation-only names and filenames exceeding 240 UTF-8 bytes are rejected with a notice.
+- Renames use Obsidian's `FileManager.renameFile`: enable **Automatically update internal links** to update links. Other frontmatter fields and the body are preserved, though Obsidian may reformat YAML.
+- Only Markdown filenames are normalized. Folder names and attachments are left alone.
+- Opening an existing note does not mutate it. Use **Pretty Titles: Normalize current note filename**, or the explicit migration API below, to migrate existing notes.
+- The **Mostrar/ocultar propriedades** ribbon button and **Pretty Titles: Toggle properties visibility** command alternate the native global Visible/Hidden setting. The command can also be assigned to a hotkey or a Commander button.
 
-> A frontmatter value used as a title **must be** a string, a number, or a list. If a key is missing or empty, the plugin falls back to the original filename. See [Template examples](./docs/TemplateExamples.md) for every case.
+The `title` property is the readable source of truth. A filename cannot reconstruct arbitrary punctuation: renaming it manually deliberately replaces the title with a filename-derived title. Edit the inline title or property when punctuation must be retained.
 
-## API
+## Install
 
-Looking to integrate with another plugin? See the [API provider](https://github.com/Snezhig/front-matter-plguin-api-provider).
+1. Disable the original **Front Matter Title** plugin (do not run both).
+2. Download `main.js` and `manifest.json` from this fork's release.
+3. Put both files in `<vault>/.obsidian/plugins/pretty-titles/`.
+4. Reload Obsidian, then enable **Pretty Titles** in Community plugins.
+5. Keep **Appearance → Show inline title** on. Inline display is enabled by default; other upstream display features are optional. The upstream Processor applies to those optional display features, not the synchronized inline title.
 
-## Thank you
+BRAT can also install `efpatti/obsidian-front-matter-title`.
 
-If you like this plugin and would like to buy me a coffee, you can!
+## Existing-note migration
 
-<a href="https://www.buymeacoffee.com/snezhig" target="_blank">
-<img src="https://cdn.buymeacoffee.com/buttons/v2/default-violet.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" >
-</a>
+Back up the vault first, including original paths. With the plugin enabled, the Obsidian developer console or CLI can start an explicit migration:
 
-## Note
+```js
+app.plugins.plugins['pretty-titles'].prettyTitles.normalizeAll()
+```
 
-Feel free to open an issue for bugs, mistakes, or ideas for this plugin.
+Progress and individual failures are available at:
+
+```js
+app.plugins.plugins['pretty-titles'].prettyTitles.migration
+```
+
+Migration fills missing `title` properties, normalizes existing titles' structural prefixes, normalizes all Markdown filenames and updates links through Obsidian. It is serialized with other synchronization work and does not run at startup. File timestamps change. Uninstalling the plugin does not undo the migration; retain the backup if rollback is needed.
+
+## Development
+
+```sh
+git clone --recurse-submodules https://github.com/efpatti/obsidian-front-matter-title.git
+cd obsidian-front-matter-title
+npm ci
+npm run build
+npm test -- --runInBand --testPathPatterns=test/unit --coverage=false
+```
+
+`src/PrettyTitles/names.ts` defines normalization. `src/PrettyTitles/TitleSync.ts` handles synchronization and the native inline title adapter. Upstream display features remain available.
+
+Run `python3 tools/pretty-titles-smoke.py <vault-name>` against a **test vault** with this build enabled to exercise editing, property changes, collisions, cancellation, links and metadata. It creates a timestamped scratch folder and removes it on success; failed runs retain that folder for investigation.
+
+Obsidian exposes no public API for editing the inline title independently of the filename. The DOM adapter and properties toggle use Obsidian internals and should be retested after app upgrades. Desktop integration is tested; mobile support is not yet verified.

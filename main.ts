@@ -1,4 +1,5 @@
 import "reflect-metadata";
+import TitleSync from "@src/PrettyTitles/TitleSync";
 
 import { AppExt, CachedMetadata, Modal, Notice, Plugin } from "obsidian";
 import { SettingsEvent, SettingsType } from "@src/Settings/SettingsType";
@@ -37,6 +38,7 @@ export default class MetaTitlePlugin extends Plugin implements PluginInterface {
     private fc: FeatureComposer;
     private mc: ManagerComposer;
     private previousVersion: string | null = null;
+    public prettyTitles: TitleSync;
 
     public getDefer(): Defer {
         return this.container.get(SI.defer);
@@ -47,12 +49,33 @@ export default class MetaTitlePlugin extends Plugin implements PluginInterface {
         this.dispatcher = this.container.get(SI["event:dispatcher"]);
         this.logger = this.container.getNamed(SI.logger, "main");
 
-        this.app.workspace.on("layout-change", () => this.dispatcher.dispatch("layout:change", null));
-        this.app.workspace.on("active-leaf-change", () => this.dispatcher.dispatch("active:leaf:change", null));
-        this.app.workspace.on("file-open", file => this.dispatcher.dispatch("file:open", new Event(file)));
+        this.registerEvent(
+            this.app.workspace.on("layout-change", () => this.dispatcher.dispatch("layout:change", null))
+        );
+        this.registerEvent(
+            this.app.workspace.on("active-leaf-change", () => this.dispatcher.dispatch("active:leaf:change", null))
+        );
+        this.registerEvent(
+            this.app.workspace.on("file-open", file => this.dispatcher.dispatch("file:open", new Event(file)))
+        );
         new App(); //replace with static
         this.container.getAllNamed<ListenerInterface>(SI.listener, "unnamed").map(e => e.bind());
         await this.loadSettings();
+        const toggleProperties = () => {
+            const vault = this.app.vault as typeof this.app.vault & {
+                getConfig(key: string): unknown;
+                setConfig(key: string, value: string): void;
+            };
+            const next = vault.getConfig("propertiesInDocument") === "hidden" ? "visible" : "hidden";
+            vault.setConfig("propertiesInDocument", next);
+            this.app.workspace.updateOptions();
+            new Notice(next === "hidden" ? "Propriedades ocultas" : "Propriedades visíveis");
+        };
+        this.addCommand({ id: "toggle-properties", name: "Toggle properties visibility", callback: toggleProperties });
+        this.addRibbonIcon("list-filter", "Mostrar/ocultar propriedades", toggleProperties);
+        this.prettyTitles = this.addChild(
+            new TitleSync(this, () => this.storage.get("features").get(Feature.InlineTitle).get("enabled").value())
+        );
         this.app.workspace.onLayoutReady(() => {
             this.getDefer().setFlag(DeferPluginReady);
             this.maybeShowReleaseNotice();
@@ -74,20 +97,24 @@ export default class MetaTitlePlugin extends Plugin implements PluginInterface {
     }
 
     public onunload() {
-        this.fc.disableAll();
+        this.fc?.disableAll();
     }
 
     private async loadSettings(): Promise<void> {
         const loaded = await this.loadData();
         // Remember the previously installed version (null on a fresh install) to
         // decide whether to show the "what's new" notice after an update.
-        this.previousVersion = loaded ? loaded.version ?? "0.0.0" : null;
+        this.previousVersion = loaded ? (loaded.version ?? "0.0.0") : null;
         if (loaded && !loaded.version) {
             loaded.version = "0.0.0";
         }
         let data = ObjectHelper.fillFrom(PluginHelper.createDefaultSettings(), loaded ?? {});
         data = new Migrator(data, this.dispatcher).migrate(PLUGIN_VERSION);
         data.version = PLUGIN_VERSION;
+        if (!loaded) {
+            data.features.inlineTitle.enabled = true;
+            data.templates.common.main = "title|_basename";
+        }
         this.storage = new Storage<SettingsType>(data);
         this.container.bind<Storage<SettingsType>>(SI["settings:storage"]).toConstantValue(this.storage);
         this.addSettingTab(this.container.resolve(SettingsTab).getTab());
@@ -193,7 +220,7 @@ export default class MetaTitlePlugin extends Plugin implements PluginInterface {
 
         for (const [id, state] of states) {
             try {
-                this.fc.toggle(id, state as boolean);
+                this.fc.toggle(id, id === Feature.InlineTitle ? false : (state as boolean));
             } catch (e) {
                 //TODO: refactor
                 this.fc.toggle(id, false);

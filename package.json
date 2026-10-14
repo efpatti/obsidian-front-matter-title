@@ -1,7 +1,7 @@
 {
-  "name": "obsidian-front-matter-title",
-  "version": "4.2.1",
-  "description": "This is a sample plugin for Obsidian (https://obsidian.md)",
+  "name": "pretty-titles",
+  "version": "4.3.0",
+  "description": "Punctuation-friendly inline titles and normalized filenames.",
   "main": "main.js",
   "scripts": {
     "pack.beta": "node utils/pack-release.mjs beta",
@@ -19,7 +19,7 @@
   },
   "keywords": [],
   "author": "snezhig",
-  "license": "MIT",
+  "license": "GPL-3.0",
   "overrides": {
     "semver": ">=7.5.2",
     "serialize-javascript": ">=7.0.6",
